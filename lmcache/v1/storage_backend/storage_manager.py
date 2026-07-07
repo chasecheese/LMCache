@@ -387,6 +387,7 @@ class StorageManager:
         memory_objs: List[MemoryObj],
         transfer_spec=None,
         location: Optional[str] = None,
+        targets_per_key: Optional[List[set]] = None,
     ) -> None:
         """
         Non-blocking function to batched put the memory objects into the
@@ -415,6 +416,19 @@ class StorageManager:
                 if backend_name in self._bypassed_backends:
                     continue
 
+            # rc-testbed: per-chunk target filtering from the external store policy
+            # (cache_engine passes targets aligned with `keys`; policy short names
+            # "cpu"/"disk"/"remote" map to backends; unknown backends get everything).
+            put_idxs = None
+            if targets_per_key is not None:
+                from lmcache.v1.store_policy_hook import BACKEND_TARGET
+
+                short = BACKEND_TARGET.get(backend_name)
+                if short is not None:
+                    put_idxs = [i for i, t in enumerate(targets_per_key) if short in t]
+                    if not put_idxs:
+                        continue
+
             allocator_backend = backend.get_allocator_backend()
             cname = get_backend_cname(allocator_backend)
             if cname not in obj_dict:
@@ -426,6 +440,9 @@ class StorageManager:
             # NOTE: the handling of exists_in_put_tasks
             # is done in the backend
             ks, objs = obj_dict[cname]
+            if put_idxs is not None and len(put_idxs) != len(ks):
+                ks = [ks[i] for i in put_idxs]
+                objs = [objs[i] for i in put_idxs]
             backend.batched_submit_put_task(ks, objs, transfer_spec=transfer_spec)
 
         for cname, (ks, objs) in obj_dict.items():
