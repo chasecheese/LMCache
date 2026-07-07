@@ -54,6 +54,8 @@ def get_store_policy():
             mod_name, _, attr = ref.partition(":")
             mod = importlib.import_module(mod_name)
             _policy = getattr(mod, attr) if attr else getattr(mod, "MyPolicy")
+            if isinstance(_policy, type):
+                _policy = _policy()            # a class was referenced: instantiate it
             if not hasattr(_policy, "on_store"):
                 raise TypeError(f"{ref} has no on_store()")
             logger.info("Store policy loaded from %s: %s", ref, _policy)
