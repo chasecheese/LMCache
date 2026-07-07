@@ -450,16 +450,30 @@ class LMCacheEngine:
         if request_configs is not None and len(request_configs) != 0:
             assert isinstance(request_configs, dict)
 
+        # rc-testbed: external KV-store scheduling policy (the D4 decision surface).
+        # Inactive (None) unless LMCACHE_STORE_POLICY_REF is set — stock fan-out then.
+        from lmcache.v1.store_policy_hook import apply_store_policy, get_store_policy
+
+        store_policy = get_store_policy()
+        chunk_targets: List[set] = []
+
         with store_stats.profile_process_tokens():
-            prev_key = 0
-            for start, end, key in self.token_database.process_tokens(
+            chunk_list = list(self.token_database.process_tokens(
                 tokens,
                 hashes,
                 offsets,
                 mask,
                 request_configs=request_configs,
-            ):
+            ))
+            per_chunk_targets = None
+            if store_policy is not None:
+                per_chunk_targets = apply_store_policy(
+                    store_policy, chunk_list, req_id, num_to_store_tokens)
+            prev_key = 0
+            for chunk_idx, (start, end, key) in enumerate(chunk_list):
                 assert isinstance(key, CacheEngineKey)
+                if per_chunk_targets is not None and not per_chunk_targets[chunk_idx]:
+                    continue  # policy SKIP: no allocation, no GPU copy, no store
                 # Allocate the memory object
                 num_tokens = end - start
                 kv_shapes = self.metadata.get_shapes(num_tokens)
@@ -487,6 +501,8 @@ class LMCacheEngine:
                 ends.append(end)
                 keys.append(key)
                 memory_objs.append(memory_obj)
+                if per_chunk_targets is not None:
+                    chunk_targets.append(per_chunk_targets[chunk_idx])
                 tot_kv_size += memory_obj.get_size()
                 tot_token_num += num_tokens
 
@@ -532,7 +548,8 @@ class LMCacheEngine:
             # TODO: we implicitly rely on batched_put to call ref_count_down
             # this management should be done in a cleaner way
             self.storage_manager.batched_put(
-                keys, memory_objs, transfer_spec=transfer_spec
+                keys, memory_objs, transfer_spec=transfer_spec,
+                targets_per_key=chunk_targets if store_policy is not None else None,
             )
 
         self.stats_monitor.on_store_finished(
