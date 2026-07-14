@@ -68,22 +68,54 @@ _mp_pending: dict = {}   # ObjectKey -> frozenset(targets), awaiting StoreContro
 _mp_l1_drop: dict = {}   # ObjectKey -> True, drop from L1 after successful L2 store
 _mp_priority: dict = {}  # ObjectKey -> float, lives as long as the key does (read by
                          # the rc_priority eviction policy; forgotten on key removal)
+_mp_chunk_size = 256     # cached from the store path (prefetch has no config handle)
 _MP_CAP = 262144
 
 
-def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size):
+def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size,
+                          extras=None):
     """obj_keys: group-0 ObjectKeys in request chunk order. Returns per-chunk
     decisions [(targets, priority), ...] (targets ⊆ {"l1","l2"}; empty = SKIP)."""
     from real.store_policy import ChunkInfo, StoreContext, validate_decisions
 
+    global _mp_chunk_size
+    _mp_chunk_size = chunk_size
     chunks = [ChunkInfo(key=k.chunk_hash.hex(), start=i * chunk_size,
                         end=(i + 1) * chunk_size, index=i)
               for i, k in enumerate(obj_keys)]
     ctx = StoreContext(req_id=str(request_id),
                        total_tokens=len(obj_keys) * chunk_size,
-                       instance_id=int(instance_id))
+                       instance_id=int(instance_id),
+                       extras=dict(extras or {}))
     return validate_decisions(policy.on_store(chunks, ctx), len(chunks),
                               known=MP_TARGETS)
+
+
+def apply_mp_hit_policy(policy, obj_keys):
+    """L2-hit path (prefetch L2->L1): per-chunk (retain_in_l1, priority).
+    Called with the keys about to be loaded into L1; no request identity is
+    available at this layer (ctx.req_id empty, instance_id -1)."""
+    from real.store_policy import ChunkInfo, StoreContext, validate_hit_decisions
+
+    cs = _mp_chunk_size
+    chunks = [ChunkInfo(key=k.chunk_hash.hex(), start=i * cs, end=(i + 1) * cs,
+                        index=i)
+              for i, k in enumerate(obj_keys)]
+    ctx = StoreContext(req_id="", total_tokens=len(obj_keys) * cs)
+    return validate_hit_decisions(policy.on_hit(chunks, ctx), len(chunks))
+
+
+def mp_record_hit_retentions(keys, decisions) -> None:
+    """Record retained prefetch loads: they re-enter L1 as {"l1"} (the store
+    controller must NOT re-store them to L2 — that's where they came from)
+    with the priority on_hit assigned."""
+    with _mp_lock:
+        for k, (retain, prio) in zip(keys, decisions):
+            if retain:
+                _mp_pending[k] = frozenset(("l1",))
+                _mp_priority[k] = prio
+        _evict_overflow(_mp_pending)
+        _evict_overflow(_mp_priority)
 
 
 def _evict_overflow(d: dict) -> None:

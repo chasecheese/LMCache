@@ -969,12 +969,14 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
         ext_policy = get_store_policy()
         policy_decisions: list[tuple] | None = None
         if ext_policy is not None:
+            l1_used, l1_total = self._ctx.storage_manager.get_l1_memory_usage()
             policy_decisions = apply_mp_store_policy(
                 ext_policy,
                 obj_keys_per_obj_group[0],
                 key.request_id,
                 instance_id,
                 self._ctx.chunk_size,
+                extras={"l1_used_bytes": l1_used, "l1_total_bytes": l1_total},
             )
 
         # NOTE: different engine groups may have different block sizes, so

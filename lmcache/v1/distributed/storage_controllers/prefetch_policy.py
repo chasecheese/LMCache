@@ -189,5 +189,47 @@ class RetainPrefetchPolicy(DefaultPrefetchPolicy):
         return [True] * len(keys)
 
 
+class RCExternalPrefetchPolicy(DefaultPrefetchPolicy):
+    """
+    rc-testbed: L1 retention of L2 hits driven by the external D4 policy's
+    ``on_hit(chunks, ctx)`` (lmcache.v1.store_policy_hook). Load-plan
+    selection is inherited from :class:`DefaultPrefetchPolicy`.
+
+    Per prefetched key the external policy returns (retain, priority):
+    retained keys stay in L1 after the read (recorded as {"l1"} so the
+    store controller does not bounce them back to L2) with the given
+    priority; the rest are temporary, exactly like the default policy.
+    With the hook inactive this degrades to DefaultPrefetchPolicy.
+    """
+
+    def select_l1_retentions(
+        self,
+        keys: list[ObjectKey],
+    ) -> list[bool]:
+        """
+        Consult the external policy's on_hit for each prefetched key.
+
+        Args:
+            keys: Keys about to be written into L1.
+
+        Returns:
+            Per-key retain flags (True = permanent, False = temporary).
+        """
+        # First Party
+        from lmcache.v1.store_policy_hook import (
+            apply_mp_hit_policy,
+            get_store_policy,
+            mp_record_hit_retentions,
+        )
+
+        policy = get_store_policy()
+        if policy is None or not hasattr(policy, "on_hit"):
+            return [False] * len(keys)
+        decisions = apply_mp_hit_policy(policy, keys)
+        mp_record_hit_retentions(keys, decisions)
+        return [retain for retain, _prio in decisions]
+
+
 register_prefetch_policy("default", DefaultPrefetchPolicy)
 register_prefetch_policy("retain", RetainPrefetchPolicy)
+register_prefetch_policy("rc_external", RCExternalPrefetchPolicy)

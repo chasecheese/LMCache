@@ -760,6 +760,11 @@ class StorageManager:
         """Descriptor of the L1 memory buffer backing this storage manager."""
         return self._l1_memory_desc
 
+    def get_l1_memory_usage(self) -> tuple[int, int]:
+        """(used_bytes, total_bytes) of the L1 pool (rc-testbed: exposed to the
+        external store-scheduling policy as an observation)."""
+        return self._l1_manager.get_memory_usage()
+
     def get_l2_usages(
         self,
     ) -> list[tuple[int | float, dict[str, object]]]:

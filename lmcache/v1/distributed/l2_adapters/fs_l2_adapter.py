@@ -180,6 +180,7 @@ class FSL2AdapterConfig(L2AdapterConfigBase):
         relative_tmp_dir: Optional[str] = None,
         read_ahead_size: Optional[int] = None,
         use_odirect: bool = False,
+        max_capacity_gb: float = 0.0,
     ):
         """Initialize FSL2AdapterConfig.
 
@@ -194,11 +195,17 @@ class FSL2AdapterConfig(L2AdapterConfigBase):
                 using O_DIRECT for both reads and writes.
                 Requires buffer sizes aligned to the
                 filesystem block size.
+            max_capacity_gb: Byte capacity of this adapter
+                in GiB; enables the base class's global
+                eviction machinery (usage_fraction and the
+                L2 eviction controller). ``0`` keeps the
+                legacy unbounded behavior.
         """
         self.base_path = base_path
         self.relative_tmp_dir = relative_tmp_dir
         self.read_ahead_size = read_ahead_size
         self.use_odirect = use_odirect
+        self.max_capacity_gb = max_capacity_gb
 
     @classmethod
     def from_dict(cls, d: dict) -> "FSL2AdapterConfig":
@@ -216,11 +223,15 @@ class FSL2AdapterConfig(L2AdapterConfigBase):
         use_odirect = d.get("use_odirect", False)
         if not isinstance(use_odirect, bool):
             raise ValueError("use_odirect must be a boolean")
+        max_capacity_gb = d.get("max_capacity_gb", 0.0)
+        if not isinstance(max_capacity_gb, (int, float)) or max_capacity_gb < 0:
+            raise ValueError("max_capacity_gb must be a non-negative number")
         return cls(
             base_path=base_path,
             relative_tmp_dir=relative_tmp_dir,
             read_ahead_size=read_ahead_size,
             use_odirect=use_odirect,
+            max_capacity_gb=float(max_capacity_gb),
         )
 
     @classmethod
@@ -236,7 +247,10 @@ class FSL2AdapterConfig(L2AdapterConfigBase):
             "readahead by reading this many bytes first "
             "(optional)\n"
             "- use_odirect (bool): bypass page cache "
-            "via O_DIRECT (optional, default false)"
+            "via O_DIRECT (optional, default false)\n"
+            "- max_capacity_gb (number): adapter capacity "
+            "in GiB, enables global L2 eviction "
+            "(optional, default 0 = unbounded)"
         )
 
 
@@ -254,7 +268,9 @@ class FSL2Adapter(L2AdapterInterface):
     """
 
     def __init__(self, config: FSL2AdapterConfig):
-        super().__init__()
+        super().__init__(
+            max_capacity_bytes=int(config.max_capacity_gb * (1 << 30))
+        )
         self._config = config
         base = config.base_path
         self._base_path = Path(base)
@@ -421,14 +437,34 @@ class FSL2Adapter(L2AdapterInterface):
     # ------------------------------------------------------------------
 
     def delete(self, keys: list[ObjectKey]) -> None:
-        # Not implemented for the filesystem adapter.
-        pass
+        """Delete the keys' chunk files (eviction path) and update accounting.
 
-    # ``get_usage()`` is inherited from ``L2AdapterInterface``. The FS
-    # adapter declares no max capacity (default 0) so ``supports_global_eviction``
-    # returns ``False`` and ``usage_fraction == -1.0`` — the eviction
-    # controller treats this as "no eviction signal" and skips the
-    # adapter entirely.
+        rc-testbed: called from the L2 eviction controller thread. Missing
+        files (already deleted, or lost the race with a concurrent store's
+        skip-if-exists check) are ignored.
+
+        Args:
+            keys: Keys whose backing files should be removed.
+        """
+        deleted_keys: list[ObjectKey] = []
+        deleted_sizes: list[int] = []
+        for key in keys:
+            path = self._key_to_path(key)
+            try:
+                size = os.path.getsize(path)
+                os.unlink(path)
+            except OSError:
+                continue
+            deleted_keys.append(key)
+            deleted_sizes.append(size)
+        if deleted_keys:
+            self._notify_keys_deleted(deleted_keys, deleted_sizes)
+
+    # ``get_usage()`` is inherited from ``L2AdapterInterface``. Without
+    # ``max_capacity_gb`` the adapter declares no max capacity, so
+    # ``supports_global_eviction`` returns ``False`` and
+    # ``usage_fraction == -1.0`` — the eviction controller treats this as
+    # "no eviction signal" and skips the adapter (legacy behavior).
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -581,6 +617,8 @@ class FSL2Adapter(L2AdapterInterface):
     ) -> None:
         success = True
         bytes_written = 0
+        stored_keys: list[ObjectKey] = []
+        stored_sizes: list[int] = []
         try:
             for key, obj in zip(keys, objects, strict=True):
                 file_path, tmp_path = self._key_to_file_and_tmp_path(key)
@@ -620,6 +658,8 @@ class FSL2Adapter(L2AdapterInterface):
 
                     await aiofiles.os.replace(tmp_path, file_path)
                     bytes_written += size
+                    stored_keys.append(key)
+                    stored_sizes.append(size)
                     logger.debug(
                         "FSL2Adapter stored key %s (%d bytes)",
                         file_path.name,
@@ -639,6 +679,11 @@ class FSL2Adapter(L2AdapterInterface):
                 task_id,
             )
             success = False
+
+        # rc-testbed: byte accounting + listener events (drives usage_fraction
+        # and the L2 eviction controller when max_capacity_gb is set)
+        if stored_keys:
+            self._notify_keys_stored(stored_keys, stored_sizes)
 
         with self._lock:
             self._completed_store_tasks[task_id] = L2StoreResult(success, bytes_written)
