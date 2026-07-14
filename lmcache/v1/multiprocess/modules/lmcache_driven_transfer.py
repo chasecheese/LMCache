@@ -967,9 +967,9 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
         )
 
         ext_policy = get_store_policy()
-        policy_targets: list[frozenset] | None = None
+        policy_decisions: list[tuple] | None = None
         if ext_policy is not None:
-            policy_targets = apply_mp_store_policy(
+            policy_decisions = apply_mp_store_policy(
                 ext_policy,
                 obj_keys_per_obj_group[0],
                 key.request_id,
@@ -1073,15 +1073,15 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
                     # reserve_write, so no L1 allocation happens and the
                     # aligned memory_objs entry below stays None (no D2H).
                     reserve_keys = obj_keys
-                    if policy_targets is not None:
+                    if policy_decisions is not None:
                         reserve_keys = [
                             k
-                            for k, t in zip(obj_keys, policy_targets)
+                            for k, (t, _p) in zip(obj_keys, policy_decisions)
                             if t
                         ]
                         mp_record_decisions(
                             reserve_keys,
-                            [t for t in policy_targets if t],
+                            [d for d in policy_decisions if d[0]],
                         )
                     reserved_dict = self._ctx.storage_manager.reserve_write(
                         reserve_keys, layout_desc, "new"

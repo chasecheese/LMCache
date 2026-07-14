@@ -66,12 +66,14 @@ def apply_store_policy(policy, chunk_list, req_id, total_tokens):
 _mp_lock = threading.Lock()
 _mp_pending: dict = {}   # ObjectKey -> frozenset(targets), awaiting StoreController
 _mp_l1_drop: dict = {}   # ObjectKey -> True, drop from L1 after successful L2 store
+_mp_priority: dict = {}  # ObjectKey -> float, lives as long as the key does (read by
+                         # the rc_priority eviction policy; forgotten on key removal)
 _MP_CAP = 262144
 
 
 def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size):
     """obj_keys: group-0 ObjectKeys in request chunk order. Returns per-chunk
-    target sets (subset of {"l1","l2"}; empty = SKIP)."""
+    decisions [(targets, priority), ...] (targets ⊆ {"l1","l2"}; empty = SKIP)."""
     from real.store_policy import ChunkInfo, StoreContext, validate_decisions
 
     chunks = [ChunkInfo(key=k.chunk_hash.hex(), start=i * chunk_size,
@@ -80,9 +82,8 @@ def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size)
     ctx = StoreContext(req_id=str(request_id),
                        total_tokens=len(obj_keys) * chunk_size,
                        instance_id=int(instance_id))
-    decisions = validate_decisions(policy.on_store(chunks, ctx), len(chunks),
-                                   known=MP_TARGETS)
-    return [targets for targets, _prio in decisions]
+    return validate_decisions(policy.on_store(chunks, ctx), len(chunks),
+                              known=MP_TARGETS)
 
 
 def _evict_overflow(d: dict) -> None:
@@ -90,12 +91,16 @@ def _evict_overflow(d: dict) -> None:
         d.pop(next(iter(d)))
 
 
-def mp_record_decisions(keys, targets_list) -> None:
-    """Record targets for keys that WILL be stored (nonempty targets), all groups."""
+def mp_record_decisions(keys, decisions) -> None:
+    """Record (targets, priority) for keys that WILL be stored (nonempty targets),
+    all groups. Targets are popped by the store controller; priorities persist for
+    the key's L1 lifetime (consumed by the rc_priority eviction policy)."""
     with _mp_lock:
-        for k, t in zip(keys, targets_list):
-            _mp_pending[k] = frozenset(t)
+        for k, (targets, prio) in zip(keys, decisions):
+            _mp_pending[k] = frozenset(targets)
+            _mp_priority[k] = prio
         _evict_overflow(_mp_pending)
+        _evict_overflow(_mp_priority)
 
 
 def mp_take_store_decision(key):
@@ -113,6 +118,20 @@ def mp_take_l1_drop(key) -> bool:
     """Pop the drop-from-L1 mark for `key` (set by an {"l2"}-only decision)."""
     with _mp_lock:
         return _mp_l1_drop.pop(key, False)
+
+
+def mp_priority_of(key) -> float:
+    """The priority the external policy attached to `key` at store time
+    (0.0 for keys it never saw: hook inactive, prefetch loads, ...)."""
+    with _mp_lock:
+        return _mp_priority.get(key, 0.0)
+
+
+def mp_forget_priorities(keys) -> None:
+    """Drop priority records for keys leaving L1 (eviction / deletion)."""
+    with _mp_lock:
+        for k in keys:
+            _mp_priority.pop(k, None)
 
 
 def get_store_policy():

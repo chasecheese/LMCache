@@ -8,6 +8,9 @@ from lmcache.v1.distributed.eviction_policy.isolated_lru import (
 )
 from lmcache.v1.distributed.eviction_policy.lru import LRUEvictionPolicy
 from lmcache.v1.distributed.eviction_policy.noop import NoOpEvictionPolicy
+from lmcache.v1.distributed.eviction_policy.rc_priority import (
+    RCPriorityEvictionPolicy,
+)
 
 
 def CreateEvictionPolicy(eviction_config: EvictionConfig) -> EvictionPolicy:
@@ -26,6 +29,8 @@ def CreateEvictionPolicy(eviction_config: EvictionConfig) -> EvictionPolicy:
         return IsolatedLRUEvictionPolicy()
     elif eviction_config.eviction_policy == "noop":
         return NoOpEvictionPolicy()
+    elif eviction_config.eviction_policy == "rc_priority":
+        return RCPriorityEvictionPolicy()
     else:
         raise ValueError(
             f"Unsupported eviction policy: {eviction_config.eviction_policy}"
