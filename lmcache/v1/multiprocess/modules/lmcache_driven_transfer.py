@@ -954,6 +954,29 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
         )
         num_chunks = len(obj_keys_per_obj_group[0])
 
+        # rc-testbed: external KV-store scheduling policy (the D4 decision
+        # surface). Consulted per chunk BEFORE any L1 reservation or GPU->CPU
+        # copy; an empty target set skips the chunk entirely. Surviving keys'
+        # targets are recorded for the "rc_external" store policy, which drives
+        # the L2 fan-out and L1 retention. Import kept local so an unset
+        # LMCACHE_STORE_POLICY_REF leaves the stock path untouched.
+        from lmcache.v1.store_policy_hook import (
+            apply_mp_store_policy,
+            get_store_policy,
+            mp_record_decisions,
+        )
+
+        ext_policy = get_store_policy()
+        policy_targets: list[frozenset] | None = None
+        if ext_policy is not None:
+            policy_targets = apply_mp_store_policy(
+                ext_policy,
+                obj_keys_per_obj_group[0],
+                key.request_id,
+                instance_id,
+                self._ctx.chunk_size,
+            )
+
         # NOTE: different engine groups may have different block sizes, so
         # ``blocks_per_chunk[i]`` is the number of blocks in one chunk for
         # group ``i``.
@@ -1046,8 +1069,22 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
                         self._ctx.chunk_size,
                         object_group_id=obj_group_id,
                     )
+                    # rc-testbed: policy SKIP = the key never enters
+                    # reserve_write, so no L1 allocation happens and the
+                    # aligned memory_objs entry below stays None (no D2H).
+                    reserve_keys = obj_keys
+                    if policy_targets is not None:
+                        reserve_keys = [
+                            k
+                            for k, t in zip(obj_keys, policy_targets)
+                            if t
+                        ]
+                        mp_record_decisions(
+                            reserve_keys,
+                            [t for t in policy_targets if t],
+                        )
                     reserved_dict = self._ctx.storage_manager.reserve_write(
-                        obj_keys, layout_desc, "new"
+                        reserve_keys, layout_desc, "new"
                     )
                     all_dict.update(reserved_dict)
                     if reserved_dict:
@@ -1106,9 +1143,12 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
 
         ed = time.perf_counter()
         if stored_count:
+            # rc-testbed: report tokens actually committed (all_dict spans all
+            # object groups), not the request's full chunk span — the two
+            # differ when the external policy skips chunks or L1 is full.
             logger.info(
                 "Stored %d tokens in %.3f seconds",
-                num_chunks * self._ctx.chunk_size,
+                (stored_count // max(num_object_groups, 1)) * self._ctx.chunk_size,
                 ed - st,
             )
         return event.ipc_handle(), True

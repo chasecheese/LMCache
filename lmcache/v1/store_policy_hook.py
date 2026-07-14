@@ -10,6 +10,7 @@
 # Standard
 import importlib
 import os
+import threading
 
 # First Party
 from lmcache.logging import init_logger
@@ -18,12 +19,17 @@ logger = init_logger(__name__)
 
 ENV = "LMCACHE_STORE_POLICY_REF"
 
-# backend registry name -> policy-facing short target name
+# In-process (v1 cache_engine) path: backend registry name -> short target name.
+# Dormant in MP mode; kept for the non-MP connector.
 BACKEND_TARGET = {
     "LocalCPUBackend": "cpu",
     "LocalDiskBackend": "disk",
     "RemoteBackend": "remote",
 }
+IN_PROCESS_TARGETS = ("cpu", "disk", "remote")
+
+# MP (multiprocess server) path: the policy decides per chunk among these tiers.
+MP_TARGETS = ("l1", "l2")
 
 _policy = None
 _loaded = False
@@ -38,8 +44,75 @@ def apply_store_policy(policy, chunk_list, req_id, total_tokens):
     chunks = [ChunkInfo(key=key.chunk_hash, start=start, end=end, index=i)
               for i, (start, end, key) in enumerate(chunk_list)]
     ctx = StoreContext(req_id=str(req_id), total_tokens=total_tokens)
-    decisions = validate_decisions(policy.on_store(chunks, ctx), len(chunks))
+    decisions = validate_decisions(policy.on_store(chunks, ctx), len(chunks),
+                                   known=IN_PROCESS_TARGETS)
     return [targets for targets, _prio in decisions]
+
+
+# ---------------------------------------------------------------------------
+# MP (multiprocess server) decision surface.
+#
+# Flow: modules/lmcache_driven_transfer.store() consults the policy per chunk
+# BEFORE reserve_write (empty targets = SKIP: no L1 reservation, no D2H copy)
+# and records the surviving keys' targets here; the "rc_external" StorePolicy
+# (storage_controllers/store_policy.py) consumes the records to decide the L2
+# fan-out and whether to drop the key from L1 after the L2 store ({"l2"}-only
+# chunks use L1 purely as a copy buffer).
+#
+# Records are popped on consumption; the caps below only bound pathological
+# leftovers (e.g. stores that failed between record and controller pickup).
+# ---------------------------------------------------------------------------
+
+_mp_lock = threading.Lock()
+_mp_pending: dict = {}   # ObjectKey -> frozenset(targets), awaiting StoreController
+_mp_l1_drop: dict = {}   # ObjectKey -> True, drop from L1 after successful L2 store
+_MP_CAP = 262144
+
+
+def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size):
+    """obj_keys: group-0 ObjectKeys in request chunk order. Returns per-chunk
+    target sets (subset of {"l1","l2"}; empty = SKIP)."""
+    from real.store_policy import ChunkInfo, StoreContext, validate_decisions
+
+    chunks = [ChunkInfo(key=k.chunk_hash.hex(), start=i * chunk_size,
+                        end=(i + 1) * chunk_size, index=i)
+              for i, k in enumerate(obj_keys)]
+    ctx = StoreContext(req_id=str(request_id),
+                       total_tokens=len(obj_keys) * chunk_size,
+                       instance_id=int(instance_id))
+    decisions = validate_decisions(policy.on_store(chunks, ctx), len(chunks),
+                                   known=MP_TARGETS)
+    return [targets for targets, _prio in decisions]
+
+
+def _evict_overflow(d: dict) -> None:
+    while len(d) > _MP_CAP:
+        d.pop(next(iter(d)))
+
+
+def mp_record_decisions(keys, targets_list) -> None:
+    """Record targets for keys that WILL be stored (nonempty targets), all groups."""
+    with _mp_lock:
+        for k, t in zip(keys, targets_list):
+            _mp_pending[k] = frozenset(t)
+        _evict_overflow(_mp_pending)
+
+
+def mp_take_store_decision(key):
+    """Pop and return the recorded targets for `key` (None if unrecorded). Keys
+    without "l1" are queued for L1 deletion after their L2 store completes."""
+    with _mp_lock:
+        targets = _mp_pending.pop(key, None)
+        if targets is not None and "l1" not in targets:
+            _mp_l1_drop[key] = True
+            _evict_overflow(_mp_l1_drop)
+    return targets
+
+
+def mp_take_l1_drop(key) -> bool:
+    """Pop the drop-from-L1 mark for `key` (set by an {"l2"}-only decision)."""
+    with _mp_lock:
+        return _mp_l1_drop.pop(key, False)
 
 
 def get_store_policy():

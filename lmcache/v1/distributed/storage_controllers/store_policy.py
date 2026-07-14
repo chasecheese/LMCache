@@ -209,5 +209,65 @@ class BufferOnlyStorePolicy(DefaultStorePolicy):
         return list(keys)
 
 
+class RCExternalStorePolicy(StorePolicy):
+    """
+    rc-testbed: L2 fan-out and L1 retention driven by the external D4
+    scheduling policy (lmcache.v1.store_policy_hook).
+
+    The MP store handler records each stored key's targets ({"l1","l2"}
+    subsets) at reserve time; this policy consumes those records:
+
+    - "l2" in targets  -> store the key to all L2 adapters
+    - "l1" not in targets -> delete the key from L1 once its L2 store
+      completes (L1 acted purely as a copy buffer)
+    - no record (hook inactive, or a non-store write such as a prefetch
+      load) -> behave like DefaultStorePolicy (store to all, keep in L1)
+    """
+
+    def select_store_targets(
+        self,
+        keys: list[ObjectKey],
+        adapters: list[AdapterDescriptor],
+    ) -> dict[int, list[ObjectKey]]:
+        """
+        Send to L2 the keys whose recorded decision includes "l2".
+
+        Args:
+            keys: Keys that were just written to L1.
+            adapters: Descriptors of available L2 adapters.
+
+        Returns:
+            Mapping from every adapter index to the selected keys.
+        """
+        # First Party
+        from lmcache.v1.store_policy_hook import mp_take_store_decision
+
+        l2_keys = []
+        for k in keys:
+            targets = mp_take_store_decision(k)
+            if targets is None or "l2" in targets:
+                l2_keys.append(k)
+        return {ad.index: list(l2_keys) for ad in adapters}
+
+    def select_l1_deletions(
+        self,
+        keys: list[ObjectKey],
+    ) -> list[ObjectKey]:
+        """
+        Drop {"l2"}-only keys from L1 after their successful L2 store.
+
+        Args:
+            keys: Keys that were successfully stored to L2.
+
+        Returns:
+            Keys whose recorded decision excluded "l1".
+        """
+        # First Party
+        from lmcache.v1.store_policy_hook import mp_take_l1_drop
+
+        return [k for k in keys if mp_take_l1_drop(k)]
+
+
 register_store_policy("default", DefaultStorePolicy)
 register_store_policy("skip_l1", BufferOnlyStorePolicy)
+register_store_policy("rc_external", RCExternalStorePolicy)
