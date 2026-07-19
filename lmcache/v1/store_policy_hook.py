@@ -5,7 +5,7 @@
 # process (PYTHONPATH must make it importable) and its on_store(chunks, ctx) decides,
 # per chunk, which backends receive the KV ("cpu"/"disk"/"remote"; empty = skip) and a
 # priority. Unset env -> hook inactive -> stock write-through fan-out.
-"""Loader for the external KV-store policy (see rc-autoresearch real/store_policy.py)."""
+"""Loader for the external KV-store policy (see the testbed/store_policy.py spec)."""
 
 # Standard
 import importlib
@@ -39,7 +39,7 @@ def apply_store_policy(policy, chunk_list, req_id, total_tokens):
     """chunk_list = [(start, end, CacheEngineKey), ...] in request order.
     Returns per-chunk target sets (subset of {"cpu","disk","remote"}; empty = skip)."""
     # Imported here: resolvable via the same PYTHONPATH that made the policy loadable.
-    from real.store_policy import ChunkInfo, StoreContext, validate_decisions
+    from testbed.store_policy import ChunkInfo, StoreContext, validate_decisions
 
     chunks = [ChunkInfo(key=key.chunk_hash, start=start, end=end, index=i)
               for i, (start, end, key) in enumerate(chunk_list)]
@@ -76,7 +76,7 @@ def apply_mp_store_policy(policy, obj_keys, request_id, instance_id, chunk_size,
                           extras=None):
     """obj_keys: group-0 ObjectKeys in request chunk order. Returns per-chunk
     decisions [(targets, priority), ...] (targets ⊆ {"l1","l2"}; empty = SKIP)."""
-    from real.store_policy import ChunkInfo, StoreContext, validate_decisions
+    from testbed.store_policy import ChunkInfo, StoreContext, validate_decisions
 
     global _mp_chunk_size
     _mp_chunk_size = chunk_size
@@ -95,7 +95,7 @@ def apply_mp_hit_policy(policy, obj_keys):
     """L2-hit path (prefetch L2->L1): per-chunk (retain_in_l1, priority).
     Called with the keys about to be loaded into L1; no request identity is
     available at this layer (ctx.req_id empty, instance_id -1)."""
-    from real.store_policy import ChunkInfo, StoreContext, validate_hit_decisions
+    from testbed.store_policy import ChunkInfo, StoreContext, validate_hit_decisions
 
     cs = _mp_chunk_size
     chunks = [ChunkInfo(key=k.chunk_hash.hex(), start=i * cs, end=(i + 1) * cs,
