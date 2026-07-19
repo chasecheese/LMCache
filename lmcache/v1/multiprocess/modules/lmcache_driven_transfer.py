@@ -954,10 +954,10 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
         )
         num_chunks = len(obj_keys_per_obj_group[0])
 
-        # rc-testbed: external KV-store scheduling policy (the D4 decision
+        # autoresearch: external KV-store scheduling policy (the D4 decision
         # surface). Consulted per chunk BEFORE any L1 reservation or GPU->CPU
         # copy; an empty target set skips the chunk entirely. Surviving keys'
-        # targets are recorded for the "rc_external" store policy, which drives
+        # targets are recorded for the "external" store policy, which drives
         # the L2 fan-out and L1 retention. Import kept local so an unset
         # LMCACHE_STORE_POLICY_REF leaves the stock path untouched.
         from lmcache.v1.store_policy_hook import (
@@ -1071,7 +1071,7 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
                         self._ctx.chunk_size,
                         object_group_id=obj_group_id,
                     )
-                    # rc-testbed: policy SKIP = the key never enters
+                    # autoresearch: policy SKIP = the key never enters
                     # reserve_write, so no L1 allocation happens and the
                     # aligned memory_objs entry below stays None (no D2H).
                     reserve_keys = obj_keys
@@ -1145,7 +1145,7 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
 
         ed = time.perf_counter()
         if stored_count:
-            # rc-testbed: report tokens actually committed (all_dict spans all
+            # autoresearch: report tokens actually committed (all_dict spans all
             # object groups), not the request's full chunk span — the two
             # differ when the external policy skips chunks or L1 is full.
             logger.info(

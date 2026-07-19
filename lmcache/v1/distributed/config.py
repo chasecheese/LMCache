@@ -211,7 +211,7 @@ class EvictionConfig:
     The configuration for eviction policies (L1 and optionally L2).
     """
 
-    eviction_policy: Literal["LRU", "IsolatedLRU", "noop", "rc_priority"]
+    eviction_policy: Literal["LRU", "IsolatedLRU", "noop", "priority"]
     """ The eviction policy to use. """
 
     trigger_watermark: float = field(default=0.8)
@@ -445,12 +445,12 @@ def add_storage_manager_args(
     eviction_group.add_argument(
         "--eviction-policy",
         type=str,
-        choices=["LRU", "IsolatedLRU", "noop", "rc_priority"],
+        choices=["LRU", "IsolatedLRU", "noop", "priority"],
         required=True,
         help="The eviction policy to use ('LRU', 'IsolatedLRU', 'noop', or "
-        "'rc_priority'). 'IsolatedLRU' maintains one LRU list per cache_salt "
+        "'priority'). 'IsolatedLRU' maintains one LRU list per cache_salt "
         "and requires quotas keyed by cache_salt to be configured via the "
-        "HTTP API. 'rc_priority' (rc-testbed) evicts lowest external-policy "
+        "HTTP API. 'priority' (autoresearch) evicts lowest external-policy "
         "priority first (LRU within ties; see lmcache.v1.store_policy_hook).",
     )
     eviction_group.add_argument(

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# rc-testbed patch: pluggable KV-store scheduling policy (the D4 decision surface).
+# autoresearch patch: pluggable KV-store scheduling policy (the D4 decision surface).
 #
 # If LMCACHE_STORE_POLICY_REF="pkg.module:attr" is set, that object is loaded once per
 # process (PYTHONPATH must make it importable) and its on_store(chunks, ctx) decides,
@@ -54,7 +54,7 @@ def apply_store_policy(policy, chunk_list, req_id, total_tokens):
 #
 # Flow: modules/lmcache_driven_transfer.store() consults the policy per chunk
 # BEFORE reserve_write (empty targets = SKIP: no L1 reservation, no D2H copy)
-# and records the surviving keys' targets here; the "rc_external" StorePolicy
+# and records the surviving keys' targets here; the "external" StorePolicy
 # (storage_controllers/store_policy.py) consumes the records to decide the L2
 # fan-out and whether to drop the key from L1 after the L2 store ({"l2"}-only
 # chunks use L1 purely as a copy buffer).
@@ -67,7 +67,7 @@ _mp_lock = threading.Lock()
 _mp_pending: dict = {}   # ObjectKey -> frozenset(targets), awaiting StoreController
 _mp_l1_drop: dict = {}   # ObjectKey -> True, drop from L1 after successful L2 store
 _mp_priority: dict = {}  # ObjectKey -> float, lives as long as the key does (read by
-                         # the rc_priority eviction policy; forgotten on key removal)
+                         # the priority eviction policy; forgotten on key removal)
 _mp_chunk_size = 256     # cached from the store path (prefetch has no config handle)
 _MP_CAP = 262144
 
@@ -126,7 +126,7 @@ def _evict_overflow(d: dict) -> None:
 def mp_record_decisions(keys, decisions) -> None:
     """Record (targets, priority) for keys that WILL be stored (nonempty targets),
     all groups. Targets are popped by the store controller; priorities persist for
-    the key's L1 lifetime (consumed by the rc_priority eviction policy)."""
+    the key's L1 lifetime (consumed by the priority eviction policy)."""
     with _mp_lock:
         for k, (targets, prio) in zip(keys, decisions):
             _mp_pending[k] = frozenset(targets)

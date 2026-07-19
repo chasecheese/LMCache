@@ -416,7 +416,7 @@ class StorageManager:
                 if backend_name in self._bypassed_backends:
                     continue
 
-            # rc-testbed: per-chunk target filtering from the external store policy
+            # autoresearch: per-chunk target filtering from the external store policy
             # (cache_engine passes targets aligned with `keys`; policy short names
             # "cpu"/"disk"/"remote" map to backends; unknown backends get everything).
             put_idxs = None

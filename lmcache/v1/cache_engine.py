@@ -477,7 +477,7 @@ class LMCacheEngine:
         if request_configs is not None and len(request_configs) != 0:
             assert isinstance(request_configs, dict)
 
-        # rc-testbed: external KV-store scheduling policy (the D4 decision surface).
+        # autoresearch: external KV-store scheduling policy (the D4 decision surface).
         # Inactive (None) unless LMCACHE_STORE_POLICY_REF is set — stock fan-out then.
         from lmcache.v1.store_policy_hook import apply_store_policy, get_store_policy
 

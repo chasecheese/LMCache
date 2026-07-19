@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-rc-testbed: priority-driven L1 eviction policy (the D4 "keep how long" surface).
+autoresearch: priority-driven L1 eviction policy (the D4 "keep how long" surface).
 
 Victim order: lowest external priority first; within equal priority, LRU order
 (least recently used first). Priorities are attached per chunk by the external
@@ -24,9 +24,9 @@ from lmcache.v1.distributed.internal_api import (
 )
 
 
-class RCPriorityEvictionPolicy(EvictionPolicy):
+class PriorityEvictionPolicy(EvictionPolicy):
     """
-    Priority-driven eviction policy for the rc-testbed D4 decision surface.
+    Priority-driven eviction policy for the autoresearch D4 decision surface.
 
     Structurally a peer of
     :class:`~lmcache.v1.distributed.eviction_policy.lru.LRUEvictionPolicy`:

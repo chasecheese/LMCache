@@ -439,7 +439,7 @@ class FSL2Adapter(L2AdapterInterface):
     def delete(self, keys: list[ObjectKey]) -> None:
         """Delete the keys' chunk files (eviction path) and update accounting.
 
-        rc-testbed: called from the L2 eviction controller thread. Missing
+        autoresearch: called from the L2 eviction controller thread. Missing
         files (already deleted, or lost the race with a concurrent store's
         skip-if-exists check) are ignored.
 
@@ -680,7 +680,7 @@ class FSL2Adapter(L2AdapterInterface):
             )
             success = False
 
-        # rc-testbed: byte accounting + listener events (drives usage_fraction
+        # autoresearch: byte accounting + listener events (drives usage_fraction
         # and the L2 eviction controller when max_capacity_gb is set)
         if stored_keys:
             self._notify_keys_stored(stored_keys, stored_sizes)

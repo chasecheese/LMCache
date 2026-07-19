@@ -209,9 +209,9 @@ class BufferOnlyStorePolicy(DefaultStorePolicy):
         return list(keys)
 
 
-class RCExternalStorePolicy(StorePolicy):
+class ExternalStorePolicy(StorePolicy):
     """
-    rc-testbed: L2 fan-out and L1 retention driven by the external D4
+    autoresearch: L2 fan-out and L1 retention driven by the external D4
     scheduling policy (lmcache.v1.store_policy_hook).
 
     The MP store handler records each stored key's targets ({"l1","l2"}
@@ -270,4 +270,4 @@ class RCExternalStorePolicy(StorePolicy):
 
 register_store_policy("default", DefaultStorePolicy)
 register_store_policy("skip_l1", BufferOnlyStorePolicy)
-register_store_policy("rc_external", RCExternalStorePolicy)
+register_store_policy("external", ExternalStorePolicy)

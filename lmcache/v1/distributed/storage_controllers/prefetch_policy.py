@@ -189,9 +189,9 @@ class RetainPrefetchPolicy(DefaultPrefetchPolicy):
         return [True] * len(keys)
 
 
-class RCExternalPrefetchPolicy(DefaultPrefetchPolicy):
+class ExternalPrefetchPolicy(DefaultPrefetchPolicy):
     """
-    rc-testbed: L1 retention of L2 hits driven by the external D4 policy's
+    autoresearch: L1 retention of L2 hits driven by the external D4 policy's
     ``on_hit(chunks, ctx)`` (lmcache.v1.store_policy_hook). Load-plan
     selection is inherited from :class:`DefaultPrefetchPolicy`.
 
@@ -232,4 +232,4 @@ class RCExternalPrefetchPolicy(DefaultPrefetchPolicy):
 
 register_prefetch_policy("default", DefaultPrefetchPolicy)
 register_prefetch_policy("retain", RetainPrefetchPolicy)
-register_prefetch_policy("rc_external", RCExternalPrefetchPolicy)
+register_prefetch_policy("external", ExternalPrefetchPolicy)
