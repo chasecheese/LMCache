@@ -50,6 +50,7 @@ from lmcache.v1.multiprocess.native_completion import (
 from lmcache.v1.multiprocess.protocols.base import RequestType
 from lmcache.v1.platform.base_cache_context import BaseCacheContext
 from lmcache.v1.platform.cache_context import create_cache_context
+from lmcache.v1 import request_log
 import lmcache.c_ops as lmc_ops
 import lmcache.python_ops_fallback as _python_ops_fallback
 
@@ -1144,15 +1145,23 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
                 )
 
         ed = time.perf_counter()
+        # autoresearch: tokens actually committed (all_dict spans all object
+        # groups), not the request's full chunk span — the two differ when the
+        # external policy skips chunks or L1 is full.
+        stored_tokens = (
+            stored_count // max(num_object_groups, 1)
+        ) * self._ctx.chunk_size
         if stored_count:
-            # autoresearch: report tokens actually committed (all_dict spans all
-            # object groups), not the request's full chunk span — the two
-            # differ when the external policy skips chunks or L1 is full.
-            logger.info(
-                "Stored %d tokens in %.3f seconds",
-                (stored_count // max(num_object_groups, 1)) * self._ctx.chunk_size,
-                ed - st,
-            )
+            logger.info("Stored %d tokens in %.3f seconds", stored_tokens, ed - st)
+        # autoresearch: opt-in per-request ledger (LMCACHE_REQUEST_LOG_PATH).
+        request_log.record_store(
+            request_id=key.request_id,
+            instance_id=instance_id,
+            offered_tokens=num_chunks * self._ctx.chunk_size,
+            stored_tokens=stored_tokens,
+            seconds=ed - st,
+            decisions=policy_decisions,
+        )
         return event.ipc_handle(), True
 
     @_lmcache_nvtx_annotate
@@ -1324,6 +1333,13 @@ class LMCacheDrivenTransferModule(InstanceLivenessTarget):
             "Retrieved %d tokens in %.3f seconds",
             tokens_retrieved,
             ed - st,
+        )
+        # autoresearch: opt-in per-request ledger (LMCACHE_REQUEST_LOG_PATH).
+        request_log.record_retrieve(
+            request_id=key.request_id,
+            instance_id=instance_id,
+            retrieved_tokens=tokens_retrieved,
+            seconds=ed - st,
         )
 
         return event.ipc_handle(), True
