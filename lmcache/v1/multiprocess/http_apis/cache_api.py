@@ -37,6 +37,7 @@ from lmcache.v1.multiprocess.http_apis.schemas import (
     ClearRequest,
     DeleteObjectsRequest,
     PrefetchRequest,
+    ScanPrefetchRequest,
 )
 import lmcache.c_ops as lmc_ops
 
@@ -117,6 +118,26 @@ async def submit_prefetch(body: PrefetchRequest, request: Request) -> dict[str, 
         body.cache_salt,
         body.source_tier,
         body.target_tier,
+    )
+
+
+@router.post("/cache/prefetches/scan", response_model=None, status_code=202)
+async def submit_scan_prefetch(
+    body: ScanPrefetchRequest, request: Request
+) -> dict[str, object]:
+    """Submit a bulk warm prefetch of the whole L2 inventory into L1.
+
+    Responses:
+        202: ``{"request_ids", "total_keys", "status": "submitted"}`` (poll
+            each id at ``GET /cache/prefetches/{id}``), or
+            ``{"request_ids": [], "total_keys": 0, "status": "noop"}``.
+        422: body validation.
+        503: not initialized, no layout registered for the model, no L2
+            adapters, or the adapter does not support listing.
+    """
+    service = get_context(request).prefetch_service
+    return await asyncio.to_thread(
+        service.submit_scan, body.model_name, body.world_size, body.cache_salt
     )
 
 

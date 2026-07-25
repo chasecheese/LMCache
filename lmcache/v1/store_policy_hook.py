@@ -184,3 +184,38 @@ def get_store_policy():
                 raise TypeError(f"{ref} has no on_store()")
             logger.info("Store policy loaded from %s: %s", ref, _policy)
     return _policy
+
+
+def reload_store_policy() -> str:
+    """Re-import the policy module and swap the live policy object.
+
+    Enables policy hot-swap on a long-lived server (the policy file was edited
+    between experiment turns) without restarting the process — every decision
+    path fetches the object through :func:`get_store_policy` per call, so the
+    swap takes effect immediately. Accumulated per-key records
+    (pending/priority) are left untouched; callers wanting a clean slate clear
+    the cache tiers separately.
+
+    Returns:
+        ``repr()`` of the freshly loaded policy object.
+
+    Raises:
+        RuntimeError: no policy ref is configured in the environment.
+        TypeError: the reloaded object has no ``on_store``.
+    """
+    global _policy, _loaded
+    ref = os.environ.get(ENV)
+    if not ref:
+        raise RuntimeError(f"{ENV} is not set; nothing to reload")
+    mod_name, _, attr = ref.partition(":")
+    mod = importlib.import_module(mod_name)
+    mod = importlib.reload(mod)
+    policy = getattr(mod, attr) if attr else getattr(mod, "MyPolicy")
+    if isinstance(policy, type):
+        policy = policy()
+    if not hasattr(policy, "on_store"):
+        raise TypeError(f"{ref} has no on_store()")
+    _policy = policy
+    _loaded = True
+    logger.info("Store policy RELOADED from %s: %s", ref, policy)
+    return repr(policy)

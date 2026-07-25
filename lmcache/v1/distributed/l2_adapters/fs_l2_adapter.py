@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 import asyncio
+import bisect
 import os
 import threading
 
@@ -31,7 +32,12 @@ import aiofiles.os
 # First Party
 from lmcache.logging import init_logger
 from lmcache.native_storage_ops import Bitmap
-from lmcache.v1.distributed.api import MemoryLayoutDesc, ObjectKey
+from lmcache.v1.distributed.api import (
+    KeyEntry,
+    KeyListPage,
+    MemoryLayoutDesc,
+    ObjectKey,
+)
 from lmcache.v1.distributed.internal_api import L2StoreResult
 from lmcache.v1.distributed.l2_adapters.base import (
     L2AdapterInterface,
@@ -417,6 +423,64 @@ class FSL2Adapter(L2AdapterInterface):
     def query_load_result(self, task_id: L2TaskId) -> Bitmap | None:
         with self._lock:
             return self._completed_load_tasks.pop(task_id, None)
+
+    # ------------------------------------------------------------------
+    # Listing
+    # ------------------------------------------------------------------
+
+    def list_l2_keys(
+        self,
+        model_name: Optional[str] = None,
+        page_size: int = 500,
+        cursor: Optional[str] = None,
+    ) -> KeyListPage:
+        """List keys resident on disk by scanning ``base_path``.
+
+        Filenames are reversible encodings of ``ObjectKey`` (see
+        :func:`_object_key_to_filename`), so a directory scan is the
+        authoritative key inventory — the adapter keeps no in-memory
+        index. Unparsable files (foreign tools, tmp leftovers) are
+        skipped silently.
+
+        Args:
+            model_name: if set, restrict to keys with this
+                ``ObjectKey.model_name``.
+            page_size: maximum entries to return in this page.
+            cursor: opaque cursor from the previous page (the last
+                filename it consumed); ``None`` on the first call.
+
+        Raises:
+            ValueError: ``page_size`` is non-positive.
+        """
+        if page_size <= 0:
+            raise ValueError(f"page_size must be positive (got {page_size})")
+        # Sorted snapshot per call: the cursor is a filename, so a
+        # concurrent store/delete shifts entries but never duplicates
+        # or skips surviving ones.
+        names = sorted(
+            e.name
+            for e in os.scandir(self._base_path)
+            if e.is_file() and e.name.endswith(_FILE_EXT)
+        )
+        i = bisect.bisect_right(names, cursor) if cursor is not None else 0
+        entries: list[KeyEntry] = []
+        while i < len(names) and len(entries) < page_size:
+            name = names[i]
+            i += 1
+            key = _filename_to_object_key(name)
+            if key is None:
+                continue
+            if model_name is not None and key.model_name != model_name:
+                continue
+            try:
+                size = os.path.getsize(self._base_path / name)
+            except OSError:
+                continue  # lost a race with eviction/delete
+            entries.append(
+                KeyEntry(key=key.to_encoded_object_key(), size_bytes=size)
+            )
+        next_token = names[i - 1] if i < len(names) else None
+        return KeyListPage(entries=tuple(entries), next_page_token=next_token)
 
     # ------------------------------------------------------------------
     # Status Interface

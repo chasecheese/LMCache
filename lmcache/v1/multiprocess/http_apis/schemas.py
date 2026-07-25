@@ -47,6 +47,20 @@ class PrefetchRequest:
 
 
 @dataclass(frozen=True)
+class ScanPrefetchRequest:
+    """Wire body for ``POST /cache/prefetches/scan``.
+
+    Bulk warm prefetch: the server scans the primary L2 adapter's full key
+    inventory for ``model_name`` (optionally restricted to ``cache_salt``)
+    and loads everything found into L1. Direction is fixed ``l2`` -> ``l1``.
+    """
+
+    model_name: str
+    world_size: int
+    cache_salt: str | None = None
+
+
+@dataclass(frozen=True)
 class ClearRequest:
     """Wire body for ``POST /cache/clear``.
 
